@@ -38,7 +38,7 @@ public class KJSON {
 
     private int getNextToken(boolean optional) throws IOException {
         int ch = getNextChar(optional);
-        while(ch >= 0 && Character.isWhitespace((char)ch)) ch = getNextChar(optional);Rubicon89
+        while(ch >= 0 && Character.isWhitespace((char)ch)) ch = getNextChar(optional);
 
     }
 
