@@ -6,13 +6,17 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.ResourceBundle;
 import java.util.regex.Pattern;
 
 public class KJSON {
-    private final Reader reader;
-    private final char[] buffer;
-    private       int    bPtr;
-    private       int    bTop;
+    public static final int EOF = -1;
+
+    private final ResourceBundle msgs = ResourceBundle.getBundle("/com/galenrhodes/kwikjson/kwikjsonmessages.properties");
+    private final Reader         reader;
+    private final char[]         buffer;
+    private       int            bPtr;
+    private       int            bTop;
 
     private KJSON(Reader reader) {
         this.reader = reader;
@@ -27,7 +31,10 @@ public class KJSON {
         if(bPtr == bTop) {
             bPtr = 0;
             do bTop = reader.read(); while(bTop == 0);
-            if(bTop < 0) { if(optional) return -1; else throw new KwikJSONException("Unexpected end of input."); }
+            if(bTop < 0) {
+                if(optional) return EOF;
+                else throw new KwikJSONException(msgs.getString("msg.err.unexpected_eof"));
+            }
         }
         return buffer[bPtr++];
     }
@@ -38,8 +45,8 @@ public class KJSON {
 
     private int getNextToken(boolean optional) throws IOException {
         int ch = getNextChar(optional);
-        while(ch >= 0 && Character.isWhitespace((char)ch)) ch = getNextChar(optional);
-
+        while(ch >= 0 && ch <= 0xffff && Character.isWhitespace((char)ch)) ch = getNextChar(optional);
+        return ch;
     }
 
     private Object parse() throws IOException {
@@ -48,7 +55,7 @@ public class KJSON {
         pushChar((char)ch);
         if(ch == '{') return parseMap();
         if(ch == '[') return parseList();
-        throw new KwikJSONException("Unexpected character: '%c'", (char)ch);
+        throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), (char)ch);
     }
 
     private List<Object> parseList() throws IOException {
@@ -61,7 +68,7 @@ public class KJSON {
 
     private String parseString() throws IOException {
         char ch = getNextChar();
-        if(ch != '"') throw new KwikJSONException("Unexpected character: '%c'", ch);
+        if(ch != '"') throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
         StringBuilder sb = new StringBuilder();
         sb.append(ch);
         do {
@@ -70,25 +77,17 @@ public class KJSON {
                 ch = getNextChar();
                 //@f:0
                 switch(ch) {
-                    case '/': sb.append('/'); break;
-                    case 'n': sb.append('\n'); break;
-                    case 'r': sb.append('\r'); break;
-                    case 't': sb.append('\t'); break;
-                    case 'f': sb.append('\f'); break;
-                    case 'b': sb.append('\b'); break;
-                    case '\\': sb.append('\\'); break;
-                    case '\'': sb.append('\''); break;
+                    case '/':  sb.append('/');             break;
+                    case 'n':  sb.append('\n');            break;
+                    case 'r':  sb.append('\r');            break;
+                    case 't':  sb.append('\t');            break;
+                    case 'f':  sb.append('\f');            break;
+                    case 'b':  sb.append('\b');            break;
+                    case '\\': sb.append('\\');            break;
+                    case '\'': sb.append('\'');            break;
                     case '\"': sb.append('\"'); ch = '\\'; break;
-                    case 'u':
-                        char[] hex = new char[4];
-                        for(int i = 0; i < 4; i++) {
-                            hex[i] = getNextChar();
-                        }
-                        String h = String.valueOf(hex);
-                        if(!Pattern.compile("[0-9a-fA-F]{4}").matcher(h).find()) throw new KwikJSONException("Invalid hexadecimal sequence: '%s'", h);
-                        sb.append((char)Integer.parseInt(h, 16));
-                        break;
-                    default: throw new KwikJSONException("Invalid character escape sequence: '\\%c'", ch);
+                    case 'u':  sb.append(getHexChar());    break;
+                    default: throw new KwikJSONException(msgs.getString("msg.err.invalid_char_esc_seq"), ch);
                 }
                 //@f:1
             }
@@ -100,8 +99,26 @@ public class KJSON {
         return sb.toString();
     }
 
+    private char getHexChar() throws IOException {
+        char[] hex = new char[4];
+        for(int i = 0; i < 4; i++) hex[i] = getNextChar();
+        String h = String.valueOf(hex);
+        if(!Pattern.compile("[0-9a-fA-F]{4}").matcher(h).find()) throw new KwikJSONException(msgs.getString("mgs.err.invalid_hex_seq"), h);
+        return (char)Integer.parseInt(h, 16);
+    }
+
+    private int peekNextToken(boolean optional) throws IOException {
+        int ch = getNextToken(optional);
+        if(ch >= 0 && ch <= 0xffff) pushChar((char)ch);
+        return ch;
+    }
+
+    private int peekNextToken() throws IOException {
+        return peekNextToken(false);
+    }
+
     private void pushChar(char ch) throws KwikJSONException {
-        if(bPtr == 0) throw new KwikJSONException("Unable to push char back onto input queue.");
+        if(bPtr == 0) throw new KwikJSONException(msgs.getString("msg.err.push_back_failed"));
         buffer[--bPtr] = ch;
     }
 
