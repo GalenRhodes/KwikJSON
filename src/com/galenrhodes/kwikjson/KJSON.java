@@ -1,12 +1,11 @@
 package com.galenrhodes.kwikjson;
 
 import java.io.*;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.ResourceBundle;
+import java.util.*;
 import java.util.regex.Pattern;
 
 public class KJSON {
@@ -25,7 +24,52 @@ public class KJSON {
         this.bPtr   = 0;
     }
 
-    private char getNextChar() throws IOException { return (char)getNextChar(false); }
+    private List<Object> _parseList() throws IOException {
+        char ch = getNextToken();
+        if(ch != '[') throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
+        ch = peekNextToken();
+        if(ch == ']') return discardNext(Collections.emptyList());
+
+        List<Object> list = new ArrayList<>();
+        do {
+            Object obj = getObject();
+            list.add(obj);
+            ch = peekNextToken();
+            if(ch == ']') return discardNext(list);
+            if(ch != ',') throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), (char)ch);
+        }
+        while(true);
+    }
+
+    private Map<String, Object> _parseMap() throws IOException {
+        return Collections.emptyMap();
+    }
+
+    private <T> T discardNext(T obj) throws IOException {
+        return discardNext(obj, false);
+    }
+
+    @SuppressWarnings("SameParameterValue")
+    private <T> T discardNext(T obj, boolean optional) throws IOException {
+        getNextChar(optional);
+        return obj;
+    }
+
+    private String getChars(int cc) throws IOException {
+        char[] hex = new char[cc];
+        for(int i = 0; i < cc; i++) hex[i] = getNextChar();
+        return String.valueOf(hex);
+    }
+
+    private char getHexChar() throws IOException {
+        String h = getChars(4);
+        if(!Pattern.compile("[0-9a-fA-F]{4}").matcher(h).find()) throw new KwikJSONException(msgs.getString("mgs.err.invalid_hex_seq"), h);
+        return (char)Integer.parseInt(h, 16);
+    }
+
+    private char getNextChar() throws IOException {
+        return (char)getNextChar(false);
+    }
 
     private int getNextChar(boolean optional) throws IOException {
         if(bPtr == bTop) {
@@ -49,21 +93,121 @@ public class KJSON {
         return ch;
     }
 
+    private Object getObject() throws IOException {
+        char ch = peekNextToken(); //@f:0
+        switch(ch) {
+            case '[': return _parseList();
+            case '{': return _parseMap();
+            case '"': return parseString();
+            case 't': return parseKeyword("true", true);
+            case 'f': return parseKeyword("false", false);
+            default:  return parseNumber(ch);
+        }
+        //@f:1
+    }
+
+    private boolean isTermChar(char ch) {
+        return ((ch == ',') || (ch == ']') || (ch == '}') || Character.isWhitespace(ch));
+    }
+
+    private boolean notDigit(char ch) {
+        return ((ch < '0') || (ch > '9'));
+    }
+
+    private boolean notTermChar(char ch) {
+        return !isTermChar(ch);
+    }
+
     private Object parse() throws IOException {
-        int ch = getNextChar(true);
+        int ch = peekNextToken(true);
         if(ch < 0) return null;
-        pushChar((char)ch);
-        if(ch == '{') return parseMap();
-        if(ch == '[') return parseList();
+        if(ch == '{') return _parseMap();
+        if(ch == '[') return _parseList();
         throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), (char)ch);
     }
 
-    private List<Object> parseList() throws IOException {
-        return Collections.emptyList();
+    private List<Object> parseAssumedList() throws IOException {
+        int ch = peekNextToken(true);
+        if(ch < 0) return Collections.emptyList();
+        if(ch == '{') return Collections.singletonList(_parseMap());
+        if(ch == '[') return _parseList();
+        throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), (char)ch);
     }
 
-    private Map<String, Object> parseMap() throws IOException {
-        return Collections.emptyMap();
+    private Map<String, Object> parseAssumedMap() throws IOException {
+        int ch = peekNextToken(true);
+        if(ch < 0) return Collections.emptyMap();
+        if(ch == '{') return _parseMap();
+        if(ch == '[') return Collections.singletonMap("root", _parseList());
+        throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), (char)ch);
+    }
+
+    private Object parseKeyword(String exemplar, Object value) throws IOException {
+        String str = getChars(exemplar.length());
+        if(exemplar.equals(str)) return value;
+        throw reportBadChar(str, exemplar);
+    }
+
+    private Number parseNumber(char ch) throws IOException {
+        if((ch != '-') && notDigit(ch)) throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
+        StringBuilder sb = new StringBuilder();
+        boolean       fp = false;
+        sb.append(ch);
+
+        if(ch == '-') {
+            if(notDigit(ch = getNextChar())) throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
+            sb.append(ch);
+        }
+
+        if(ch == '0') {
+            if((ch = getNextChar()) != '.') return pushChar(ch, BigInteger.ZERO);
+            fp = true;
+            sb.append(ch);
+            if(notDigit(ch = getNextChar())) throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
+            sb.append(ch);
+        }
+
+        ch = getDigits(sb);
+        if(ch == '.') {
+            if(fp)  throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
+            fp = true;
+            ch = getAtLeast1Digit(sb);
+        }
+
+        if(ch == 'e' || ch == 'E') {
+            sb.append('e');
+            ch = getNextChar();
+            if((ch != '+') && (ch != '-') && notDigit(ch)) throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
+            ch = getDigits(sb);
+        }
+        pushChar(ch);
+
+        try {
+            return fp ? new BigDecimal(sb.toString()) : new BigInteger(sb.toString());
+        }
+        catch(Exception e) {
+            throw new KwikJSONException("Malformed number: %s", sb.toString());
+        }
+    }
+
+    private char getAtLeast1Digit(StringBuilder sb) throws IOException {
+        char ch = getNextChar();
+        if(notDigit(ch)) throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
+        sb.append(ch);
+        return getDigits(sb);
+    }
+
+    private char getDigits(StringBuilder sb) throws IOException {
+        char ch = getNextChar();
+        while(isDigit(ch)) {
+            sb.append(ch);
+            ch = getNextChar();
+        }
+        return ch;
+    }
+
+    private boolean isDigit(char ch) {
+        return ((ch >= '0') && (ch <= '9'));
     }
 
     private String parseString() throws IOException {
@@ -99,22 +243,14 @@ public class KJSON {
         return sb.toString();
     }
 
-    private char getHexChar() throws IOException {
-        char[] hex = new char[4];
-        for(int i = 0; i < 4; i++) hex[i] = getNextChar();
-        String h = String.valueOf(hex);
-        if(!Pattern.compile("[0-9a-fA-F]{4}").matcher(h).find()) throw new KwikJSONException(msgs.getString("mgs.err.invalid_hex_seq"), h);
-        return (char)Integer.parseInt(h, 16);
-    }
-
     private int peekNextToken(boolean optional) throws IOException {
         int ch = getNextToken(optional);
         if(ch >= 0 && ch <= 0xffff) pushChar((char)ch);
         return ch;
     }
 
-    private int peekNextToken() throws IOException {
-        return peekNextToken(false);
+    private char peekNextToken() throws IOException {
+        return (char)peekNextToken(false);
     }
 
     private void pushChar(char ch) throws KwikJSONException {
@@ -122,12 +258,26 @@ public class KJSON {
         buffer[--bPtr] = ch;
     }
 
+    private <T> T pushChar(char ch, T obj) throws KwikJSONException {
+        pushChar(ch);
+        return obj;
+    }
+
+    private IOException reportBadChar(String sample, String exemplar) {
+        for(int i = 0, j = Math.min(sample.length(), exemplar.length()); i < j; i++) {
+            if(sample.charAt(i) != exemplar.charAt(i)) return new KwikJSONException(msgs.getString("msg.err.unexpected_char"), sample.charAt(i));
+        }
+        if(sample.length() < exemplar.length()) return new KwikJSONException("Too few characters. Expected \"%s\", but only got \"%s\".", exemplar, sample);
+        if(sample.length() > exemplar.length()) return new KwikJSONException("Too many characters. Expected only \"%s\", but got \"%s\".", exemplar, sample);
+        return new KwikJSONException("Internal inconsistency.");
+    }
+
     public static Object parseJSON(Reader reader) throws IOException {
         return new KJSON(reader).parse();
     }
 
     public static List<Object> parseJSONList(Reader reader) throws IOException {
-        return new KJSON(reader).parseList();
+        return new KJSON(reader).parseAssumedList();
     }
 
     public static List<Object> parseJSONList(InputStream inputStream, Charset cs) throws IOException {
@@ -143,7 +293,7 @@ public class KJSON {
     }
 
     public static Map<String, Object> parseJSONMap(Reader reader) throws IOException {
-        return new KJSON(reader).parseMap();
+        return new KJSON(reader).parseAssumedMap();
     }
 
     public static Map<String, Object> parseJSONMap(InputStream inputStream, Charset cs) throws IOException {
