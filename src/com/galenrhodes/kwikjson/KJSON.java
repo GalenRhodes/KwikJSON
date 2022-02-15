@@ -3,19 +3,50 @@ package com.galenrhodes.kwikjson;
 import java.io.*;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLConnection;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.regex.Pattern;
 
 public class KJSON {
-    public static final int EOF = -1;
+    public static final ResourceBundle msgs     = ResourceBundle.getBundle("/com/galenrhodes/kwikjson/kwikjsonmessages.properties");
+    public static final KwikProperties props    = new KwikProperties("kwikjson.properties");
+    public static final String         APP_JSON = props.getProperty("p.http.content_type.json", "application/json");
 
-    private final ResourceBundle msgs = ResourceBundle.getBundle("/com/galenrhodes/kwikjson/kwikjsonmessages.properties");
-    private final Reader         reader;
-    private final char[]         buffer;
-    private       int            bPtr;
-    private       int            bTop;
+    public static final char APOS           = props.getChar("p.apos");
+    public static final char QUOTE          = props.getChar("p.quote");
+    public static final char PERIOD         = props.getChar("p.char_period");
+    public static final char PLUS           = props.getChar("p.char_plus");
+    public static final char MINUS          = props.getChar("p.char_minus");
+    public static final char BS             = props.getChar("p.char_bs");
+    public static final char FS             = props.getChar("p.char_fs");
+    public static final char CH_B           = props.getChar("p.char_b");
+    public static final char CH_F           = props.getChar("p.char_f");
+    public static final char CH_N           = props.getChar("p.char_n");
+    public static final char CH_R           = props.getChar("p.char_r");
+    public static final char CH_T           = props.getChar("p.char_t");
+    public static final char CH_U           = props.getChar("p.char_u");
+    public static final char UC_E           = props.getChar("p.char_uc_e");
+    public static final char LC_E           = props.getChar("p.char_lc_e");
+    public static final char ZERO           = props.getChar("p.char_zero");
+    public static final char LIST_OPEN      = props.getChar("p.list_open");
+    public static final char LIST_CLOSE     = props.getChar("p.list_close");
+    public static final char MAP_OPEN       = props.getChar("p.map_open");
+    public static final char MAP_CLOSE      = props.getChar("p.map_close");
+    public static final char MAP_SEPARATOR  = props.getChar("p.map_kv_separator");
+    public static final char LIST_SEPARATOR = props.getChar("p.list_item_separator");
+
+    public static final String MSG_BAD_CHAR = msgs.getString("msg.err.unexpected_char");
+    public static final String HTTP         = "http";
+    public static final String HTTPS        = "https";
+
+    private final Reader reader;
+    private final char[] buffer;
+    private       int    bPtr;
+    private       int    bTop;
 
     private KJSON(Reader reader) {
         this.reader = reader;
@@ -25,50 +56,64 @@ public class KJSON {
     }
 
     private List<Object> _parseList() throws IOException {
-        char ch = getNextToken();
-        if(ch != '[') throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
-        ch = peekNextToken();
-        if(ch == ']') return discardNext(Collections.emptyList());
+        CharHolder ch = getNextToken();
+        if(ch.not(LIST_OPEN)) throw new KwikJSONException(MSG_BAD_CHAR, ch);
+        if(getNextToken(ch).is(LIST_CLOSE)) return Collections.emptyList();
+        pushChar(ch);
 
         List<Object> list = new ArrayList<>();
         do {
-            Object obj = getObject();
-            list.add(obj);
-            ch = peekNextToken();
-            if(ch == ']') return discardNext(list);
-            if(ch != ',') throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), (char)ch);
-        }
-        while(true);
+            list.add(getObject());
+            if(getNextToken(ch).is(LIST_CLOSE)) return list;
+            if(ch.not(LIST_SEPARATOR)) throw new KwikJSONException(MSG_BAD_CHAR, ch);
+        } while(true);
     }
 
     private Map<String, Object> _parseMap() throws IOException {
-        return Collections.emptyMap();
+        CharHolder ch = getNextToken();
+        if(ch.not(MAP_OPEN)) throw new KwikJSONException(MSG_BAD_CHAR, ch);
+        if(getNextToken(ch).is(MAP_CLOSE)) return Collections.emptyMap();
+        pushChar(ch);
+
+        Map<String, Object> map = new LinkedHashMap<>();
+        do {
+            String str = parseString();
+            if(getNextToken(ch).not(MAP_SEPARATOR)) throw new KwikJSONException(MSG_BAD_CHAR, ch);
+            map.put(str, getObject());
+            if(getNextToken(ch).is(MAP_CLOSE)) return map;
+            if(ch.not(LIST_SEPARATOR)) throw new KwikJSONException(MSG_BAD_CHAR, ch);
+        } while(true);
     }
 
-    private <T> T discardNext(T obj) throws IOException {
-        return discardNext(obj, false);
-    }
-
-    @SuppressWarnings("SameParameterValue")
-    private <T> T discardNext(T obj, boolean optional) throws IOException {
-        getNextChar(optional);
-        return obj;
+    private void getAtLeast1Digit(StringBuilder sb, CharHolder ch) throws IOException {
+        if(getNextChar(ch).notDigit()) throw new KwikJSONException(MSG_BAD_CHAR, ch);
+        ch.append(sb);
+        getDigits(sb, ch);
     }
 
     private String getChars(int cc) throws IOException {
-        char[] hex = new char[cc];
-        for(int i = 0; i < cc; i++) hex[i] = getNextChar();
-        return String.valueOf(hex);
+        char[] array = new char[cc];
+        for(int i = 0; i < cc; i++) array[i] = (char)getNextChar(false);
+        return String.valueOf(array);
+    }
+
+    private void getDigits(StringBuilder sb, CharHolder ch) throws IOException {
+        while(getNextChar(ch).isDigit()) ch.append(sb);
     }
 
     private char getHexChar() throws IOException {
-        String h = getChars(4);
-        if(!Pattern.compile("[0-9a-fA-F]{4}").matcher(h).find()) throw new KwikJSONException(msgs.getString("mgs.err.invalid_hex_seq"), h);
-        return (char)Integer.parseInt(h, 16);
+        String str = getChars(4);
+        if(!Pattern.compile(props.getProperty("p.unicode.regexp")).matcher(str).find()) throw new KwikJSONException(msgs.getString("mgs.err.invalid_hex_seq"), str);
+        return (char)Integer.parseInt(str, 16);
     }
 
-    private char getNextChar() throws IOException {
-        return (char)getNextChar(false);
+    private CharHolder getNextChar(CharHolder ch) throws IOException {
+        ch.set((char)getNextChar(false));
+        return ch;
+    }
+
+    private CharHolder getNextChar() throws IOException {
+        return new CharHolder((char)getNextChar(false));
     }
 
     private int getNextChar(boolean optional) throws IOException {
@@ -76,70 +121,45 @@ public class KJSON {
             bPtr = 0;
             do bTop = reader.read(); while(bTop == 0);
             if(bTop < 0) {
-                if(optional) return EOF;
+                if(optional) return props.getInteger("p.eof");
                 else throw new KwikJSONException(msgs.getString("msg.err.unexpected_eof"));
             }
         }
         return buffer[bPtr++];
     }
 
-    private char getNextToken() throws IOException {
-        return (char)getNextToken(false);
-    }
-
-    private int getNextToken(boolean optional) throws IOException {
-        int ch = getNextChar(optional);
-        while(ch >= 0 && ch <= 0xffff && Character.isWhitespace((char)ch)) ch = getNextChar(optional);
+    private CharHolder getNextToken(CharHolder ch) throws IOException {
+        ch.set((char)getNextToken(false));
         return ch;
     }
 
+    private CharHolder getNextToken() throws IOException {
+        return new CharHolder((char)getNextToken(false));
+    }
+
+    private int getNextToken(boolean optional) throws IOException {
+        int i = getNextChar(optional);
+        while(i >= 0 && !Character.isWhitespace((char)i)) i = getNextChar(optional);
+        return i;
+    }
+
     private Object getObject() throws IOException {
-        char ch = peekNextToken(); //@f:0
-        switch(ch) {
-            case '[': return _parseList();
-            case '{': return _parseMap();
-            case '"': return parseString();
-            case 't': return parseKeyword("true", true);
-            case 'f': return parseKeyword("false", false);
-            default:  return parseNumber(ch);
-        }
-        //@f:1
-    }
-
-    private boolean isTermChar(char ch) {
-        return ((ch == ',') || (ch == ']') || (ch == '}') || Character.isWhitespace(ch));
-    }
-
-    private boolean notDigit(char ch) {
-        return ((ch < '0') || (ch > '9'));
-    }
-
-    private boolean notTermChar(char ch) {
-        return !isTermChar(ch);
+        CharHolder ch = peekNextToken();
+        if(ch.is(LIST_OPEN)) return _parseList();
+        else if(ch.is(MAP_OPEN)) return _parseMap();
+        else if(ch.is(QUOTE)) return parseString();
+        else if(ch.is(CH_T)) return parseKeyword(props.getProperty("p.true"), true);
+        else if(ch.is(CH_F)) return parseKeyword(props.getProperty("p.false"), false);
+        else if(ch.is(CH_N)) return parseKeyword(props.getProperty("p.null"), null);
+        else return parseNumber();
     }
 
     private Object parse() throws IOException {
         int ch = peekNextToken(true);
         if(ch < 0) return null;
-        if(ch == '{') return _parseMap();
-        if(ch == '[') return _parseList();
-        throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), (char)ch);
-    }
-
-    private List<Object> parseAssumedList() throws IOException {
-        int ch = peekNextToken(true);
-        if(ch < 0) return Collections.emptyList();
-        if(ch == '{') return Collections.singletonList(_parseMap());
-        if(ch == '[') return _parseList();
-        throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), (char)ch);
-    }
-
-    private Map<String, Object> parseAssumedMap() throws IOException {
-        int ch = peekNextToken(true);
-        if(ch < 0) return Collections.emptyMap();
-        if(ch == '{') return _parseMap();
-        if(ch == '[') return Collections.singletonMap("root", _parseList());
-        throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), (char)ch);
+        if(ch == MAP_OPEN) return _parseMap();
+        if(ch == LIST_OPEN) return _parseList();
+        throw new KwikJSONException(MSG_BAD_CHAR, (char)ch);
     }
 
     private Object parseKeyword(String exemplar, Object value) throws IOException {
@@ -148,109 +168,106 @@ public class KJSON {
         throw reportBadChar(str, exemplar);
     }
 
-    private Number parseNumber(char ch) throws IOException {
-        if((ch != '-') && notDigit(ch)) throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
+    private Number parseNumber() throws IOException {
         StringBuilder sb = new StringBuilder();
-        boolean       fp = false;
-        sb.append(ch);
+        BoolHolder    fp = new BoolHolder(false);
+        CharHolder    ch = getNextToken();
 
-        if(ch == '-') {
-            if(notDigit(ch = getNextChar())) throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
-            sb.append(ch);
-        }
+        if(ch.not(MINUS) && ch.notDigit()) throw new KwikJSONException(MSG_BAD_CHAR, ch);
+        ch.append(sb);
+        parseNumberMinusSign(sb, ch);
 
-        if(ch == '0') {
-            if((ch = getNextChar()) != '.') return pushChar(ch, BigInteger.ZERO);
-            fp = true;
-            sb.append(ch);
-            if(notDigit(ch = getNextChar())) throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
-            sb.append(ch);
-        }
+        BigInteger bigInteger = parseNumberLeadingZero(sb, ch, fp);
+        if(bigInteger != null) return bigInteger;
 
-        ch = getDigits(sb);
-        if(ch == '.') {
-            if(fp)  throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
-            fp = true;
-            ch = getAtLeast1Digit(sb);
-        }
-
-        if(ch == 'e' || ch == 'E') {
-            sb.append('e');
-            ch = getNextChar();
-            if((ch != '+') && (ch != '-') && notDigit(ch)) throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
-            ch = getDigits(sb);
-        }
+        getDigits(sb, ch);
+        parseNumberDecimal(sb, ch, fp);
+        parseNumberExponent(sb, ch);
         pushChar(ch);
+        return parseNumberConvert(sb, fp);
+    }
 
-        try {
-            return fp ? new BigDecimal(sb.toString()) : new BigInteger(sb.toString());
-        }
-        catch(Exception e) {
-            throw new KwikJSONException("Malformed number: %s", sb.toString());
+    private Number parseNumberConvert(StringBuilder sb, BoolHolder fp) throws KwikJSONException {
+        String str = sb.toString();
+        try { return fp.cond(() -> new BigDecimal(str), () -> new BigInteger(str)); }
+        catch(Exception e) { throw new KwikJSONException(msgs.getString("msg.err.malformed_number"), str); }
+    }
+
+    private void parseNumberDecimal(StringBuilder sb, CharHolder ch, BoolHolder fp) throws IOException {
+        if(ch.is(PERIOD)) {
+            if(fp.is()) throw new KwikJSONException(MSG_BAD_CHAR, ch);
+            fp.set();
+            getAtLeast1Digit(sb, ch);
         }
     }
 
-    private char getAtLeast1Digit(StringBuilder sb) throws IOException {
-        char ch = getNextChar();
-        if(notDigit(ch)) throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
-        sb.append(ch);
-        return getDigits(sb);
-    }
-
-    private char getDigits(StringBuilder sb) throws IOException {
-        char ch = getNextChar();
-        while(isDigit(ch)) {
-            sb.append(ch);
-            ch = getNextChar();
+    private void parseNumberExponent(StringBuilder sb, CharHolder ch) throws IOException {
+        if(ch.is(LC_E) || ch.is(UC_E)) {
+            sb.append(Character.toLowerCase(ch.get()));
+            getNextChar(ch);
+            if(ch.not(PLUS) && ch.not(MINUS) && ch.notDigit()) throw new KwikJSONException(MSG_BAD_CHAR, ch);
+            getDigits(sb, ch);
         }
-        return ch;
     }
 
-    private boolean isDigit(char ch) {
-        return ((ch >= '0') && (ch <= '9'));
+    private BigInteger parseNumberLeadingZero(StringBuilder sb, CharHolder ch, BoolHolder fp) throws IOException {
+        if(ch.is(ZERO)) {
+            if(getNextChar(ch).not(PERIOD)) return pushChar(ch, BigInteger.ZERO);
+            fp.set();
+            ch.append(sb);
+            if(getNextChar(ch).notDigit()) throw new KwikJSONException(MSG_BAD_CHAR, ch);
+            ch.append(sb);
+        }
+        return null;
+    }
+
+    private void parseNumberMinusSign(StringBuilder sb, CharHolder ch) throws IOException {
+        if(ch.is(MINUS)) {
+            if(getNextChar(ch).notDigit()) throw new KwikJSONException(MSG_BAD_CHAR, ch);
+            ch.append(sb);
+        }
     }
 
     private String parseString() throws IOException {
-        char ch = getNextChar();
-        if(ch != '"') throw new KwikJSONException(msgs.getString("msg.err.unexpected_char"), ch);
+        CharHolder ch = getNextChar();
+        if(ch.not(QUOTE)) throw new KwikJSONException(MSG_BAD_CHAR, ch);
         StringBuilder sb = new StringBuilder();
-        sb.append(ch);
+        ch.append(sb);
         do {
-            ch = getNextChar();
-            if(ch == '\\') {
-                ch = getNextChar();
-                //@f:0
-                switch(ch) {
-                    case '/':  sb.append('/');             break;
-                    case 'n':  sb.append('\n');            break;
-                    case 'r':  sb.append('\r');            break;
-                    case 't':  sb.append('\t');            break;
-                    case 'f':  sb.append('\f');            break;
-                    case 'b':  sb.append('\b');            break;
-                    case '\\': sb.append('\\');            break;
-                    case '\'': sb.append('\'');            break;
-                    case '\"': sb.append('\"'); ch = '\\'; break;
-                    case 'u':  sb.append(getHexChar());    break;
-                    default: throw new KwikJSONException(msgs.getString("msg.err.invalid_char_esc_seq"), ch);
-                }
-                //@f:1
+            getNextChar(ch);
+            if(ch.is(BS)) {
+                getNextChar(ch);
+                if(ch.is(FS)) ch.append(sb);
+                else if(ch.is(CH_N)) sb.append(props.getChar("p.lf"));
+                else if(ch.is(CH_R)) sb.append(props.getChar("p.cr"));
+                else if(ch.is(CH_T)) sb.append(props.getChar("p.tab"));
+                else if(ch.is(CH_F)) sb.append(props.getChar("p.ff"));
+                else if(ch.is(CH_B)) sb.append(props.getChar("p.bs"));
+                else if(ch.is(BS)) ch.append(sb);
+                else if(ch.is(APOS)) ch.append(sb);
+                else if(ch.is(QUOTE)) ch.appendAndSet(sb, BS);
+                else if(ch.is(CH_U)) sb.append(getHexChar());
+                else throw new KwikJSONException(msgs.getString("msg.err.invalid_char_esc_seq"), ch);
             }
-            else {
-                sb.append(ch);
-            }
-        }
-        while(ch != '"');
+            else ch.append(sb);
+        } while(ch.not(QUOTE));
         return sb.toString();
     }
 
-    private int peekNextToken(boolean optional) throws IOException {
-        int ch = getNextToken(optional);
-        if(ch >= 0 && ch <= 0xffff) pushChar((char)ch);
-        return ch;
+    private int peekNextChar(boolean optional) throws IOException {
+        int i = getNextChar(optional);
+        if(i >= 0) bPtr--;
+        return i;
     }
 
-    private char peekNextToken() throws IOException {
-        return (char)peekNextToken(false);
+    private int peekNextToken(boolean optional) throws IOException {
+        int i = getNextToken(optional);
+        if(i >= 0) bPtr--;
+        return i;
+    }
+
+    private CharHolder peekNextToken() throws IOException {
+        return new CharHolder((char)peekNextToken(false));
     }
 
     private void pushChar(char ch) throws KwikJSONException {
@@ -258,53 +275,72 @@ public class KJSON {
         buffer[--bPtr] = ch;
     }
 
-    private <T> T pushChar(char ch, T obj) throws KwikJSONException {
+    private void pushChar(CharHolder ch) throws KwikJSONException {
+        pushChar(ch.get());
+    }
+
+    @SuppressWarnings("SameParameterValue")
+    private <T> T pushChar(CharHolder ch, T obj) throws KwikJSONException {
         pushChar(ch);
         return obj;
     }
 
     private IOException reportBadChar(String sample, String exemplar) {
         for(int i = 0, j = Math.min(sample.length(), exemplar.length()); i < j; i++) {
-            if(sample.charAt(i) != exemplar.charAt(i)) return new KwikJSONException(msgs.getString("msg.err.unexpected_char"), sample.charAt(i));
+            if(sample.charAt(i) != exemplar.charAt(i)) return new KwikJSONException(MSG_BAD_CHAR, sample.charAt(i));
         }
-        if(sample.length() < exemplar.length()) return new KwikJSONException("Too few characters. Expected \"%s\", but only got \"%s\".", exemplar, sample);
-        if(sample.length() > exemplar.length()) return new KwikJSONException("Too many characters. Expected only \"%s\", but got \"%s\".", exemplar, sample);
-        return new KwikJSONException("Internal inconsistency.");
+        if(sample.length() < exemplar.length()) return new KwikJSONException(msgs.getString("msg.err.too_few_chars"), exemplar, sample);
+        if(sample.length() > exemplar.length()) return new KwikJSONException(msgs.getString("msg.err.too_many_chars"), exemplar, sample);
+        return new KwikJSONException(msgs.getString("msg.err.internal_inconsistency"));
     }
 
     public static Object parseJSON(Reader reader) throws IOException {
         return new KJSON(reader).parse();
     }
 
-    public static List<Object> parseJSONList(Reader reader) throws IOException {
-        return new KJSON(reader).parseAssumedList();
+    public static Object parseJSON(String string) throws IOException {
+        return parseJSON(new StringReader(string));
     }
 
-    public static List<Object> parseJSONList(InputStream inputStream, Charset cs) throws IOException {
-        return parseJSONList(new InputStreamReader(inputStream, cs));
+    public static Object parseJSON(InputStream inputStream, Charset cs) throws IOException {
+        return parseJSON(new InputStreamReader(inputStream, cs));
     }
 
-    public static List<Object> parseJSONList(InputStream inputStream) throws IOException {
-        return parseJSONList(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
+    public static Object parseJSON(InputStream inputStream) throws IOException {
+        return parseJSON(inputStream, StandardCharsets.UTF_8);
     }
 
-    public static List<Object> parseJSONList(String string) throws IOException {
-        return parseJSONList(new StringReader(string));
+    public static Object parseJSON(byte[] bytes, Charset cs) throws IOException {
+        return parseJSON(new ByteArrayInputStream(bytes), cs);
     }
 
-    public static Map<String, Object> parseJSONMap(Reader reader) throws IOException {
-        return new KJSON(reader).parseAssumedMap();
+    public static Object parseJSON(byte[] bytes) throws IOException {
+        return parseJSON(bytes, StandardCharsets.UTF_8);
     }
 
-    public static Map<String, Object> parseJSONMap(InputStream inputStream, Charset cs) throws IOException {
-        return parseJSONMap(new InputStreamReader(inputStream, cs));
+    public static Object parseJSON(URL url) throws IOException {
+        if(HTTP.equals(url.getProtocol()) || HTTPS.equals(url.getProtocol())) {
+            HttpURLConnection uconn = (HttpURLConnection)url.openConnection();
+            uconn.setRequestMethod(props.getProperty("p.http.method"));
+            uconn.setRequestProperty(props.getProperty("p.http.accept.key"), props.getProperty("p.http.accept.value"));
+            InputStream inputStream = uconn.getInputStream();
+            if(inputStream != null) return parseFromURLConnection(uconn, inputStream);
+            return parseFromURLConnection(uconn, uconn.getErrorStream());
+        }
+        else {
+            URLConnection uconn = url.openConnection();
+            return parseFromURLConnection(uconn, uconn.getInputStream());
+        }
     }
 
-    public static Map<String, Object> parseJSONMap(InputStream inputStream) throws IOException {
-        return parseJSONMap(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
+    private static Charset getCharset(URLConnection uconn) {
+        try { return Charset.forName(uconn.getContentEncoding()); }
+        catch(Exception e) { return StandardCharsets.UTF_8; }
     }
 
-    public static Map<String, Object> parseJSONMap(String string) throws IOException {
-        return parseJSONMap(new StringReader(string));
+    private static Object parseFromURLConnection(URLConnection uconn, InputStream inputStream) throws IOException {
+        if(inputStream == null) throw new KwikJSONException(msgs.getString("msg.err.unexpected_eof"));
+        Charset cs = getCharset(uconn);
+        return APP_JSON.equals(uconn.getContentType()) ? parseJSON(inputStream, cs) : Collections.singletonList(new String(U.readStream(inputStream), cs));
     }
 }
