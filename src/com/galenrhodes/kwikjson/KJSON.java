@@ -12,9 +12,8 @@ import java.util.*;
 import java.util.regex.Pattern;
 
 public class KJSON {
-    public static final ResourceBundle msgs     = ResourceBundle.getBundle("/com/galenrhodes/kwikjson/kwikjsonmessages.properties");
-    public static final KwikProperties props    = new KwikProperties("kwikjson.properties");
-    public static final String         APP_JSON = props.getProperty("p.http.content_type.json", "application/json");
+    public static final ResourceBundle msgs  = ResourceBundle.getBundle("/com/galenrhodes/kwikjson/kwikjsonmessages.properties");
+    public static final KwikProperties props = new KwikProperties("kwikjson.properties");
 
     public static final char APOS           = props.getChar("p.apos");
     public static final char QUOTE          = props.getChar("p.quote");
@@ -39,6 +38,7 @@ public class KJSON {
     public static final char MAP_SEPARATOR  = props.getChar("p.map_kv_separator");
     public static final char LIST_SEPARATOR = props.getChar("p.list_item_separator");
 
+    public static final String APP_JSON     = props.getProperty("p.http.content_type.json", "application/json");
     public static final String MSG_BAD_CHAR = msgs.getString("msg.err.unexpected_char");
     public static final String HTTP         = "http";
     public static final String HTTPS        = "https";
