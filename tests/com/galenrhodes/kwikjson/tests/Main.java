@@ -79,13 +79,45 @@ public class Main {
         }
     }
 
-    private static void printList(int level, List<Object> list) {
-        print(level, "msg.list", (o) -> o, (o1) -> new Object[] { buildIndent(level + 1) }, () -> F5, list);
+    private static void printList(final int level, List<Object> list) {
+        print(level, "msg.list", new FooBar1<Object>() {
+                  @Override
+                  public Object getObject(Object o) {
+                      return o;
+                  }
+              },
+              new FooBar2<Object>() {
+                  @Override
+                  public Object[] getArgs(Object o1) {
+                      return new Object[] { buildIndent(level + 1) };
+                  }
+              },
+              new FooBar3() {
+                  @Override
+                  public String getFormat() {
+                      return F5;
+                  }
+              }, list);
     }
 
-    private static void printMap(int level, Map<String, Object> map) {
-        int l = (getLength(map.keySet()) + 2);
-        print(level, "msg.map", Map.Entry::getValue, (e) -> new Object[] { buildIndent(level), quote(e.getKey()) }, () -> String.format(F8, l, SPACE), map.entrySet());
+    private static void printMap(final int level, Map<String, Object> map) {
+        final int l = (getLength(map.keySet()) + 2);
+        print(level, "msg.map", new FooBar1<Map.Entry<String, Object>>() {
+            @Override
+            public Object getObject(Map.Entry<String, Object> e) {
+                return e.getValue();
+            }
+        }, new FooBar2<Map.Entry<String, Object>>() {
+            @Override
+            public Object[] getArgs(Map.Entry<String, Object> e) {
+                return new Object[] { buildIndent(level), quote(e.getKey()) };
+            }
+        }, new FooBar3() {
+            @Override
+            public String getFormat() {
+                return String.format(F8, l, SPACE);
+            }
+        }, map.entrySet());
     }
 
     private static void printf(String format, Object... args) {

@@ -9,6 +9,7 @@ import java.net.URLConnection;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.Callable;
 import java.util.regex.Pattern;
 
 public class KJSON {
@@ -185,8 +186,20 @@ public class KJSON {
     }
 
     private Number parseNumberConvert(StringBuilder sb, BoolHolder fp) throws KwikJSONException {
-        String str = sb.toString();
-        try { return fp.cond(() -> new BigDecimal(str), () -> new BigInteger(str)); }
+        final String str = sb.toString();
+        try {
+            return fp.cond(new Callable<Number>() {
+                @Override
+                public Number call() {
+                    return new BigDecimal(str);
+                }
+            }, new Callable<Number>() {
+                @Override
+                public Number call() {
+                    return new BigInteger(str);
+                }
+            });
+        }
         catch(Exception e) { throw new KwikJSONException(msgs.getString("msg.err.malformed_number"), str); }
     }
 
