@@ -12,7 +12,7 @@ import java.util.*;
 import java.util.regex.Pattern;
 
 public class KJSON {
-    public static final ResourceBundle msgs  = ResourceBundle.getBundle("/com/galenrhodes/kwikjson/kwikjsonmessages.properties");
+    public static final ResourceBundle msgs  = ResourceBundle.getBundle("com.galenrhodes.kwikjson.kwikjsonmessages");
     public static final KwikProperties props = new KwikProperties("kwikjson.properties");
 
     public static final char APOS           = props.getChar("p.apos");
@@ -38,10 +38,7 @@ public class KJSON {
     public static final char MAP_SEPARATOR  = props.getChar("p.map_kv_separator");
     public static final char LIST_SEPARATOR = props.getChar("p.list_item_separator");
 
-    public static final String APP_JSON     = props.getProperty("p.http.content_type.json", "application/json");
     public static final String MSG_BAD_CHAR = msgs.getString("msg.err.unexpected_char");
-    public static final String HTTP         = "http";
-    public static final String HTTPS        = "https";
 
     private final Reader reader;
     private final char[] buffer;
@@ -119,7 +116,7 @@ public class KJSON {
     private int getNextChar(boolean optional) throws IOException {
         if(bPtr == bTop) {
             bPtr = 0;
-            do bTop = reader.read(); while(bTop == 0);
+            do bTop = reader.read(buffer); while(bTop == 0);
             if(bTop < 0) {
                 if(optional) return props.getInteger("p.eof");
                 else throw new KwikJSONException(msgs.getString("msg.err.unexpected_eof"));
@@ -139,7 +136,7 @@ public class KJSON {
 
     private int getNextToken(boolean optional) throws IOException {
         int i = getNextChar(optional);
-        while(i >= 0 && !Character.isWhitespace((char)i)) i = getNextChar(optional);
+        while(i >= 0 && Character.isWhitespace((char)i)) i = getNextChar(optional);
         return i;
     }
 
@@ -196,6 +193,7 @@ public class KJSON {
     private void parseNumberDecimal(StringBuilder sb, CharHolder ch, BoolHolder fp) throws IOException {
         if(ch.is(PERIOD)) {
             if(fp.is()) throw new KwikJSONException(MSG_BAD_CHAR, ch);
+            ch.append(sb);
             fp.set();
             getAtLeast1Digit(sb, ch);
         }
@@ -203,9 +201,10 @@ public class KJSON {
 
     private void parseNumberExponent(StringBuilder sb, CharHolder ch) throws IOException {
         if(ch.is(LC_E) || ch.is(UC_E)) {
-            sb.append(Character.toLowerCase(ch.get()));
+            sb.append(Character.toUpperCase(ch.get()));
             getNextChar(ch);
             if(ch.not(PLUS) && ch.not(MINUS) && ch.notDigit()) throw new KwikJSONException(MSG_BAD_CHAR, ch);
+            ch.append(sb);
             getDigits(sb, ch);
         }
     }
@@ -229,28 +228,28 @@ public class KJSON {
     }
 
     private String parseString() throws IOException {
-        CharHolder ch = getNextChar();
+        CharHolder ch = getNextToken();
         if(ch.not(QUOTE)) throw new KwikJSONException(MSG_BAD_CHAR, ch);
         StringBuilder sb = new StringBuilder();
-        ch.append(sb);
-        do {
-            getNextChar(ch);
+        getNextChar(ch);
+        while(ch.not(QUOTE)) {
             if(ch.is(BS)) {
-                getNextChar(ch);
-                if(ch.is(FS)) ch.append(sb);
-                else if(ch.is(CH_N)) sb.append(props.getChar("p.lf"));
-                else if(ch.is(CH_R)) sb.append(props.getChar("p.cr"));
-                else if(ch.is(CH_T)) sb.append(props.getChar("p.tab"));
-                else if(ch.is(CH_F)) sb.append(props.getChar("p.ff"));
-                else if(ch.is(CH_B)) sb.append(props.getChar("p.bs"));
-                else if(ch.is(BS)) ch.append(sb);
-                else if(ch.is(APOS)) ch.append(sb);
-                else if(ch.is(QUOTE)) ch.appendAndSet(sb, BS);
-                else if(ch.is(CH_U)) sb.append(getHexChar());
-                else throw new KwikJSONException(msgs.getString("msg.err.invalid_char_esc_seq"), ch);
+                getNextChar(ch); //@f:0
+                if(ch.is(FS))         ch.append(sb);
+                else if(ch.is(CH_N))  sb.append(props.getChar("p.lf"));
+                else if(ch.is(CH_R))  sb.append(props.getChar("p.cr"));
+                else if(ch.is(CH_T))  sb.append(props.getChar("p.tab"));
+                else if(ch.is(CH_F))  sb.append(props.getChar("p.ff"));
+                else if(ch.is(CH_B))  sb.append(props.getChar("p.bs"));
+                else if(ch.is(BS))    ch.append(sb);
+                else if(ch.is(APOS))  ch.append(sb);
+                else if(ch.is(QUOTE)) ch.append(sb);
+                else if(ch.is(CH_U))  sb.append(getHexChar());
+                else throw new KwikJSONException(msgs.getString("msg.err.invalid_char_esc_seq"), ch); //@f:1
             }
             else ch.append(sb);
-        } while(ch.not(QUOTE));
+            getNextChar(ch);
+        }
         return sb.toString();
     }
 
@@ -319,7 +318,7 @@ public class KJSON {
     }
 
     public static Object parseJSON(URL url) throws IOException {
-        if(HTTP.equals(url.getProtocol()) || HTTPS.equals(url.getProtocol())) {
+        if(props.getProperty("p.http.http").equals(url.getProtocol()) || props.getProperty("p.http.https").equals(url.getProtocol())) {
             HttpURLConnection uconn = (HttpURLConnection)url.openConnection();
             uconn.setRequestMethod(props.getProperty("p.http.method"));
             uconn.setRequestProperty(props.getProperty("p.http.accept.key"), props.getProperty("p.http.accept.value"));
@@ -333,14 +332,10 @@ public class KJSON {
         }
     }
 
-    private static Charset getCharset(URLConnection uconn) {
-        try { return Charset.forName(uconn.getContentEncoding()); }
-        catch(Exception e) { return StandardCharsets.UTF_8; }
-    }
-
     private static Object parseFromURLConnection(URLConnection uconn, InputStream inputStream) throws IOException {
         if(inputStream == null) throw new KwikJSONException(msgs.getString("msg.err.unexpected_eof"));
-        Charset cs = getCharset(uconn);
-        return APP_JSON.equals(uconn.getContentType()) ? parseJSON(inputStream, cs) : Collections.singletonList(new String(U.readStream(inputStream), cs));
+        Charset cs = U.getCharset(uconn);
+        String  ct = props.getProperty("p.http.content_type.json");
+        return ct.equals(uconn.getContentType()) ? parseJSON(inputStream, cs) : Collections.singletonList(new String(U.readStream(inputStream), cs));
     }
 }
